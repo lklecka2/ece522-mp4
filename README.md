@@ -37,4 +37,3 @@ To run a single experiment, directly find its corresponding config file and use.
 ./sim "$relative_path_to_config_file"
     # e.g.,  ./sim configs/example.config
 ```
-

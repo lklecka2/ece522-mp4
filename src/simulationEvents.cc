@@ -659,6 +659,11 @@ size_t BatcherEvent::processEvict(Addr start_addr, TensorLocation dest, bool is_
     }
   }
 
+  // overriding destination if CPU is already full
+  if (dest == IN_CPU && sim_sys->CPU_PT.reachMemoryLine()) {
+    dest = IN_SSD;
+  }
+
   if (dest == IN_CPU) {
     sim_sys->CPU_PT.allocPTE(start_addr);
     assert(CPU_PTE->location == IN_CPU);

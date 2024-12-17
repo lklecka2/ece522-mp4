@@ -154,15 +154,38 @@ void tensor_first_pass_liveness_analysis() {
   const int tensor_num = tensor_list.size();
   const int kernel_num = kernel_list.size();
 
-  for (int i = 0; i < tensor_num; i++) {
-    Tensor *current_tensor = tensor_list[i];
-    // TODO: complete liveness analysis
-    if (!current_tensor->is_global_weight) {
-      // This tensor is intermediate
-
+  for (int i = 0; i < kernel_num; i++) {
+    CUDAKernel current_kernel = kernel_list[i];
+    for (const auto& input : current_kernel.inputs)  {
+      if (!input->is_global_weight) {
+        if (input->live_interval.first == -1 || input->live_interval.first > current_kernel.kernel_id) {
+          input->live_interval.first = current_kernel.kernel_id;
+        }
+        if (input->live_interval.second == -1 || input->live_interval.second < current_kernel.kernel_id) {
+          input->live_interval.second = current_kernel.kernel_id;
+        }
+      }
     }
-    // global tensors do not need this info
+    for (const auto& output : current_kernel.outputs)  {
+      if (!output->is_global_weight) {
+        if (output->live_interval.first == -1 || output->live_interval.first > current_kernel.kernel_id) {
+          output->live_interval.first = current_kernel.kernel_id;
+        }
+        if (output->live_interval.second == -1 || output->live_interval.second < current_kernel.kernel_id) {
+          output->live_interval.second = current_kernel.kernel_id;
+        }
+      }
+    }
   }
+  // for (int i = 0; i < tensor_num; i++) {
+  //   Tensor *current_tensor = tensor_list[i];
+  //   // TODO: complete liveness analysis
+  //   if (!current_tensor->is_global_weight) {
+  //     // This tensor is intermediate
+
+  //   }
+  //   // global tensors do not need this info
+  // }
 }
 
 void Tensor::print_liveness() {
@@ -186,13 +209,22 @@ void tensor_second_pass_interval_formation() {
 
   for (int i = 0; i < tensor_num; i++) {
     Tensor *current_tensor = tensor_list[i];
-    // TODO: complete inactive period analysis
     if (!current_tensor->is_global_weight) {
-      // This tensor is intermediate
-
+      if (current_tensor->live_interval.first != 0) {
+        InactivePeriod before(current_tensor);
+        before.kernelLevel_interval.first = 0;
+        before.kernelLevel_interval.second = current_tensor->live_interval.first-1;
+        current_tensor->inactive_periods.push_back(&before);
+      }
+      if (current_tensor->live_interval.second != kernel_num-1) {
+        InactivePeriod after(current_tensor);
+        after.kernelLevel_interval.first = current_tensor->live_interval.second+1;
+        after.kernelLevel_interval.second = kernel_num-1;
+        current_tensor->inactive_periods.push_back(&after);
+      }
     } else {
-      // This tensor is global
-
+      // Am I supposed to push an empty inactive period with is_looped = true?
+      // current_tensor->inactive_periods.push()
     }
   }
 }
@@ -279,7 +311,19 @@ void print_GPU_mem_really_in_use() {
  */
 void scheduling_movement_hints() {
   // TODO: fill the data structure "std::vector<TensorMovementHint> movement_hints" with your own hints!
-
+  /*
+  std::vector<Tensor *> r;
+  kernel_list[getCurrentIteration()+1].getRequiredTensors(r);
+  for(int i = 0; i < r.size(); i++) {
+    current_kernel = r[i];
+    for(const auto& input : current_kernel.inputs) {
+      movement_hints.push_back(TensorMovementHint(NOT_KNOWN, IN_GPU, input));
+    }
+    for(const auto& output: current_kernel.outputs) {
+      movement_hints.push_back(TensorMovementHint(NOT_PRESENT, IN_GPU, output))
+    }
+  }
+  */
 
   // make sure the movement hints are sorted, the simulator depends on this
   std::sort(movement_hints.begin(), movement_hints.end());
