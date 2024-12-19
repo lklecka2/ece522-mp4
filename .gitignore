@@ -1,1 +1,4 @@
 .vscode
+results
+src/gen_configs
+src/simulation_run.log
