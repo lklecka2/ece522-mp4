@@ -1,6 +1,7 @@
 .vscode
 results
 src/gen_configs
+src/gen_cost_configs
 src/simulation_run.log
 graphs
 graphs-lifetimes
