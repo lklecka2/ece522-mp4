@@ -310,20 +310,26 @@ void print_GPU_mem_really_in_use() {
  * @brief fill this function to schedule your movement hints
  */
 void scheduling_movement_hints() {
-  // TODO: fill the data structure "std::vector<TensorMovementHint> movement_hints" with your own hints!
-  /*
-  std::vector<Tensor *> r;
+  /* std::vector<Tensor *> r;
   kernel_list[getCurrentIteration()+1].getRequiredTensors(r);
   for(int i = 0; i < r.size(); i++) {
     current_kernel = r[i];
     for(const auto& input : current_kernel.inputs) {
-      movement_hints.push_back(TensorMovementHint(NOT_KNOWN, IN_GPU, input));
+      movement_hints.push_back(TensorMovementHint(TensorMovementHint::NOT_KNOWN, TensorMovementHint::IN_GPU, input));
     }
     for(const auto& output: current_kernel.outputs) {
-      movement_hints.push_back(TensorMovementHint(NOT_PRESENT, IN_GPU, output))
+      movement_hints.push_back(TensorMovementHint(TensorMovementHint::NOT_PRESENT, TensorMovementHint::IN_GPU, output))
     }
+  } */
+  movement_hints.clear();
+  for (int i = 0; i < (int)kernel_list.size(); i++) {
+      int next_kernel_id = (i + 1) % kernel_list.size();
+      std::vector<Tensor*> required_tensors;
+      kernel_list[next_kernel_id].getRequiredTensors(required_tensors);
+      for (auto t : required_tensors) {
+          movement_hints.emplace_back(TensorLocation::NOT_KNOWN, TensorLocation::IN_GPU, kernel_list[next_kernel_id].kernel_id, t);
+      }
   }
-  */
 
   // make sure the movement hints are sorted, the simulator depends on this
   std::sort(movement_hints.begin(), movement_hints.end());

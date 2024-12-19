@@ -3,4 +3,5 @@ __pycache__/
 *.out
 lru
 sim
+sim-hints
 *.txt
