@@ -46,8 +46,8 @@ def find_config_files(gen_config_dir: Path, selected_experiments: List[str] = No
     
     if selected_experiments:
         # Filter files based on the selected experiments
-        filtered_files = [f for f in all_config_files if any(exp in f.name for exp in selected_experiments)]
-        logging.info(f"Filtering configurations for experiments: {', '.join(selected_experiments)}")
+        filtered_files = [f for f in all_config_files if any(exp in f.stem for exp in selected_experiments)]
+        logging.info(f"Filtering configurations for experiments containing: {', '.join(selected_experiments)}")
     else:
         filtered_files = all_config_files
     
@@ -120,14 +120,13 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         '--config-dir',
         type=str,
-        required=True,
-        help="Directory containing configuration (.conf) files."
+        default="gen_cost_configs",
+        help="Directory containing configuration (.conf) files. Default is 'gen_cost_configs'."
     )
     parser.add_argument(
         '--experiments',
         nargs='+',
-        choices=['ideal', 'hostdram', 'ssd'],
-        help="Specify which experiments to run. Choices: ideal, hostdram, ssd. If not specified, all experiments are run."
+        help="Specify which experiments to run by including a substring of the experiment names. For example, 'hostdram' to include all hostdram* experiments."
     )
     parser.add_argument(
         '--parallel',
@@ -153,7 +152,7 @@ def main():
     setup_logging(LOG_FILE)
     logging.info("=== Simulation Run Started ===")
     if selected_experiments:
-        logging.info(f"Selected experiments to run: {', '.join(selected_experiments)}")
+        logging.info(f"Selected experiments to run (matching substrings): {', '.join(selected_experiments)}")
     else:
         logging.info("No specific experiments selected; running all experiments.")
 
@@ -175,9 +174,13 @@ def main():
         nonlocal successes, failures
         # Extract model, batch_size, and experiment from config file name
         try:
-            model, batch_size, experiment = config_file.stem.split('-', 2)
+            # Assuming filename format: MODEL-1024-experiment.conf
+            parts = config_file.stem.split('-', 2)
+            if len(parts) != 3:
+                raise ValueError("Filename does not have exactly three parts separated by '-'")
+            model, batch_size, experiment = parts
         except ValueError:
-            logging.error(f"Config file name format invalid: {config_file.name}. Expected format 'MODEL-BATCHSIZE-EXPERIMENT.conf'.")
+            logging.error(f"Config file name format invalid: {config_file.name}. Expected format 'MODEL-1024-EXPERIMENT.conf'.")
             with lock:
                 failures += 1
             return
