@@ -72,7 +72,7 @@ is_simulation           1
 is_ideal                {is_ideal}
 num_iteration           2
 eviction_policy         LRU
-use_movement_hints      0
+use_movement_hints      1
 """
 
 # Directory where config files will be saved
