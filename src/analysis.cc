@@ -327,7 +327,8 @@ void scheduling_movement_hints() {
       std::vector<Tensor*> required_tensors;
       kernel_list[next_kernel_id].getRequiredTensors(required_tensors);
       for (auto t : required_tensors) {
-          movement_hints.emplace_back(TensorLocation::NOT_KNOWN, TensorLocation::IN_GPU, kernel_list[next_kernel_id].kernel_id, t);
+          movement_hints.emplace_back(TensorLocation::NOT_KNOWN, TensorLocation::IN_GPU, kernel_list[i].kernel_id, t);
+          movement_hints.emplace_back(TensorLocation::NOT_PRESENT, TensorLocation::IN_GPU, kernel_list[i].kernel_id, t);
       }
   }
 
