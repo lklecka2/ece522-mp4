@@ -315,7 +315,7 @@ tuple<Addr, GPUPageTable::GPUPageTableEntry, TensorLocation, GPUPageTable::Evict
       } else if (ret_candidate.hotness == Eviction_P::Cold) {
         hot = 0;
       } else {
-        hot = 0;
+        hot = 1;
       }
 
       ret_candidate.hotness = Eviction_P::Invalid;
