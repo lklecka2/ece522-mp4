@@ -305,6 +305,23 @@ tuple<Addr, GPUPageTable::GPUPageTableEntry, TensorLocation, GPUPageTable::Evict
       EvictCandidate &ret_candidate = get<3>(evicted_entry);
       ret_candidate.vpn = *lru_it;
       ret_candidate.tensor = searchTensorForPage(ret_candidate.vpn);
+      ret_candidate.hotness = Eviction_P::Invalid;
+      ret_candidate.exact_hotness = Eviction_P::Invalid;
+
+      get<0>(evicted_entry) = ret_candidate.vpn;
+      get<1>(evicted_entry) = page_table.at(ret_candidate.vpn);
+      // get<2>(evicted_entry) = (rand() & 1) ? IN_SSD : IN_CPU;
+      get<2>(evicted_entry) = IN_CPU;
+      break;
+    }
+    case EvcPolicy::CUSTOM: {
+      sim_sys->LRUSuggestInitialLRUBase();
+      auto lru_it = sim_sys->getSuggestedLRUBase();
+      assert(lru_it != lru_addrs.end());
+
+      EvictCandidate &ret_candidate = get<3>(evicted_entry);
+      ret_candidate.vpn = *lru_it;
+      ret_candidate.tensor = searchTensorForPage(ret_candidate.vpn);
       int hot = 0;
       if (ret_candidate.hotness == Dead) {
         hot = -1;

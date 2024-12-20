@@ -131,7 +131,7 @@ class CPUPageTable {
 
 class GPUPageTable {
   public:
-    enum EvcPolicy { RANDOM, LRU, GUIDED, DEEPUM };
+    enum EvcPolicy { RANDOM, LRU, GUIDED, DEEPUM, CUSTOM};
     class GPUPageTableEntry {
       public:
         Addr ppn;

@@ -1,7 +1,8 @@
 .vscode
-results
 src/gen_configs
 src/gen_cost_configs
+src/gen_p5_configs
+src/gen_p6_configs
 src/simulation_run.log
 graphs
 graphs-lifetimes
