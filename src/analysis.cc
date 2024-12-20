@@ -306,6 +306,239 @@ void print_GPU_mem_really_in_use() {
   }
 }
 
+// Constants (adapt as needed)
+static constexpr double GPU_FREQUENCY_GHZ = 1.2;
+static constexpr double SYSTEM_LATENCY_US = 45;
+static constexpr double CPU_PCIE_BW_GBPS = 15.754;
+static constexpr double SSD_PCIE_BW_GBPS = 3.2;
+static constexpr double SSD_READ_LATENCY_US = 12;
+static constexpr double SSD_WRITE_LATENCY_US = 16;
+static constexpr long long BYTES_PER_GB = (1024LL * 1024LL * 1024LL);
+
+// Multiplier to execution time:
+static double execution_time_multiplier = 1.5;  // Example: 10% overhead
+
+// Optional size threshold (in bytes). Set to 0 or negative to disable.
+static long long size_threshold_bytes = 4 * BYTES_PER_GB;
+
+// Function to set the size threshold (can be called externally)
+void set_size_threshold(long long threshold_bytes) {
+    size_threshold_bytes = threshold_bytes;
+}
+
+// Function to calculate CPU transfer cycles
+static long long cpu_transfer_cycles(long long size_bytes) {
+    double transfer_time_sec = (double)size_bytes / (CPU_PCIE_BW_GBPS * 1e9) + (SYSTEM_LATENCY_US * 1e-6);
+    return static_cast<long long>(std::ceil(transfer_time_sec * GPU_FREQUENCY_GHZ * 1e9));
+}
+
+// Function to calculate SSD transfer cycles
+static long long ssd_transfer_cycles(long long size_bytes, bool write) {
+    double ssd_latency = write ? SSD_WRITE_LATENCY_US : SSD_READ_LATENCY_US;
+    double transfer_time_sec = (double)size_bytes / (SSD_PCIE_BW_GBPS * 1e9) + ((SYSTEM_LATENCY_US + ssd_latency) * 1e-6);
+    return static_cast<long long>(std::ceil(transfer_time_sec * GPU_FREQUENCY_GHZ * 1e9));
+}
+
+// Compute kernel start times in cycles, applying the execution_time_multiplier
+static std::vector<long long> compute_kernel_start_cycles() {
+    std::vector<long long> start_cycles(kernel_list.size(), 0);
+    long long cumulative = 0;
+    for (size_t i = 0; i < kernel_list.size(); i++) {
+        start_cycles[i] = cumulative;
+        // Apply multiplier
+        long long adjusted_cycles = static_cast<long long>(kernel_list[i].execution_cycles * execution_time_multiplier);
+        cumulative += adjusted_cycles;
+    }
+    return start_cycles;
+}
+
+// Binary search to find the first kernel after a given cycle
+static int first_kernel_after(const std::vector<long long>& start_cycle_of_kernel, long long cycle) {
+    int left = 0;
+    int right = static_cast<int>(start_cycle_of_kernel.size()) - 1;
+    int ans = -1;
+    while (left <= right) {
+        int mid = (left + right) / 2;
+        if (start_cycle_of_kernel[mid] > cycle) {
+            ans = mid;
+            right = mid - 1;
+        } else {
+            left = mid + 1;
+        }
+    }
+    return ans;
+}
+
+// Helper function to schedule prefetch just-in-time
+static void schedule_prefetch(TensorLocation src_loc, Tensor* chosen_tensor, int next_k, long long prefetch_cycles, 
+                              const std::vector<long long>& start_cycle_of_kernel) 
+{
+    long long target_time = start_cycle_of_kernel[next_k] - prefetch_cycles;
+    int prefetch_kernel_id;
+    if (target_time <= 0) {
+        // Prefetch at the very beginning
+        prefetch_kernel_id = 0;
+    } else {
+        // Find the first kernel that starts after target_time
+        int k_after = first_kernel_after(start_cycle_of_kernel, target_time);
+        if (k_after == -1) {
+            // No kernel starts after target_time, use last kernel
+            prefetch_kernel_id = static_cast<int>(start_cycle_of_kernel.size()) - 1;
+        } else {
+            // Schedule prefetch at k_after
+            prefetch_kernel_id = k_after;
+        }
+    }
+
+    movement_hints.emplace_back(src_loc, TensorLocation::IN_GPU, kernel_list[prefetch_kernel_id].kernel_id, chosen_tensor);
+}
+
+// Function to add movement hints for a single tensor
+void add_movement_hints_for_tensor(Tensor* chosen_tensor, 
+                                   const std::vector<int>& chosen_usage_kernels,
+                                   const std::vector<long long>& start_cycle_of_kernel) 
+{
+    // If no usage or just one usage, no offloading/prefetching needed.
+    if (chosen_usage_kernels.empty()) {
+        return;
+    }
+
+    // Apply size threshold
+    if (size_threshold_bytes > 0 && chosen_tensor->size_in_byte < size_threshold_bytes) {
+        // Skip tensors below the threshold
+        return;
+    }
+
+    long long size_bytes = chosen_tensor->size_in_byte;
+    long long cpu_write = cpu_transfer_cycles(size_bytes);
+    long long cpu_read  = cpu_transfer_cycles(size_bytes);
+    long long ssd_write = ssd_transfer_cycles(size_bytes, true);
+    long long ssd_read  = ssd_transfer_cycles(size_bytes, false);
+
+    // Check if the first usage is as an output. If yes, preallocate at first usage kernel.
+    int first_usage_kernel = chosen_usage_kernels[0];
+    bool first_usage_input_or_global = false;
+    {
+        // Check if at first_usage_kernel, tensor is input or workspace or global
+        const CUDAKernel &k = kernel_list[first_usage_kernel];
+        if (chosen_tensor->is_global_weight) {
+            first_usage_input_or_global = true;
+        } else if (k.inputs.find(chosen_tensor) != k.inputs.end()) {
+            first_usage_input_or_global = true;
+        } else if (k.workspace == chosen_tensor) {
+            first_usage_input_or_global = true;
+        }
+    }
+
+    // if (!first_usage_input_or_global) {
+    //     // Appears first as output -> preallocate on GPU
+    //     movement_hints.emplace_back(TensorLocation::NOT_PRESENT, TensorLocation::IN_GPU, 
+    //                                 kernel_list[first_usage_kernel].kernel_id, chosen_tensor);
+    // }
+
+    // Handle offloading between usages
+    for (size_t i = 0; i + 1 < chosen_usage_kernels.size(); i++) {
+        int current_k = chosen_usage_kernels[i];
+        int next_k = chosen_usage_kernels[i + 1];
+
+        // Idle interval between these usages:
+        long long start_idle = start_cycle_of_kernel[current_k] + kernel_list[current_k].execution_cycles * execution_time_multiplier; // after current kernel finishes
+        long long end_idle = start_cycle_of_kernel[next_k];          // start of next usage kernel
+        long long idle_cycles = end_idle - start_idle;
+
+        if (idle_cycles <= 0) {
+            // No idle gap, skip
+            continue;
+        }
+
+        // Decide offload location (SSD or CPU)
+        bool use_ssd = (idle_cycles > (ssd_write + ssd_read) * 2);
+
+        // Evict after current_k finishes
+        if (use_ssd) {
+            movement_hints.emplace_back(TensorLocation::IN_GPU, TensorLocation::IN_SSD, 
+                                        kernel_list[current_k].kernel_id + 1, chosen_tensor);
+        } else {
+            movement_hints.emplace_back(TensorLocation::IN_GPU, TensorLocation::IN_CPU, 
+                                        kernel_list[current_k].kernel_id + 1, chosen_tensor);
+        }
+
+        // Prefetch before next_k starts
+        long long prefetch_cost = use_ssd ? ssd_read : cpu_read;
+        TensorLocation src_loc = use_ssd ? TensorLocation::IN_SSD : TensorLocation::IN_CPU;
+        schedule_prefetch(src_loc, chosen_tensor, next_k, prefetch_cost, start_cycle_of_kernel);
+    }
+}
+
+// Function to compute the offloading policy for all tensors
+void compute_offloading_policy() {
+    // Map each tensor to all kernels that use it
+    std::unordered_map<Tensor*, std::vector<int>> tensor_usage_map;
+
+    int max_kernel_id = -1;
+    for (const auto &k : kernel_list) {
+        if (k.kernel_id > max_kernel_id) {
+            max_kernel_id = k.kernel_id;
+        }
+        // Inputs
+        for (auto* t : k.inputs) {
+            tensor_usage_map[t].push_back(k.kernel_id);
+        }
+        // Outputs
+        for (auto* t : k.outputs) {
+            tensor_usage_map[t].push_back(k.kernel_id);
+        }
+        // Workspace
+        if (k.workspace) {
+            tensor_usage_map[k.workspace].push_back(k.kernel_id);
+        }
+    }
+
+    // For global tensors, extend usage from 0 to max_kernel_id if needed
+    for (auto* t : tensor_list) {
+        if (t->is_global_weight) {
+            if (tensor_usage_map.find(t) == tensor_usage_map.end()) {
+                tensor_usage_map[t] = {};
+            }
+            if (tensor_usage_map[t].empty()) {
+                // Not used explicitly, but global
+                for (int kid = 0; kid <= max_kernel_id; kid++) {
+                    tensor_usage_map[t].push_back(kid);
+                }
+            } else {
+                // Ensure full coverage
+                std::sort(tensor_usage_map[t].begin(), tensor_usage_map[t].end());
+                int first_used = tensor_usage_map[t].front();
+                int last_used = tensor_usage_map[t].back();
+                if (first_used > 0) {
+                    tensor_usage_map[t].insert(tensor_usage_map[t].begin(), 0);
+                }
+                if (last_used < max_kernel_id) {
+                    if (tensor_usage_map[t].back() != max_kernel_id) {
+                        tensor_usage_map[t].push_back(max_kernel_id);
+                    }
+                }
+            }
+        }
+    }
+
+    // Sort usage kernels and remove duplicates
+    for (auto &kv : tensor_usage_map) {
+        std::sort(kv.second.begin(), kv.second.end());
+        kv.second.erase(std::unique(kv.second.begin(), kv.second.end()), kv.second.end());
+    }
+
+    // Compute start cycles with multiplier
+    std::vector<long long> start_cycle_of_kernel = compute_kernel_start_cycles();
+
+    // Add movement hints for each tensor
+    for (auto &kv : tensor_usage_map) {
+        Tensor* t = kv.first;
+        const std::vector<int>& usage_kernels = kv.second;
+        add_movement_hints_for_tensor(t, usage_kernels, start_cycle_of_kernel);
+    }
+}
+
 /**
  * @brief fill this function to schedule your movement hints
  */
@@ -322,6 +555,44 @@ void scheduling_movement_hints() {
     }
   } */
   movement_hints.clear();
+  int part_6 = 1;
+  if (part_6 !=0) {
+    for (int i = 0; i < (int)kernel_list.size(); i++) {
+      int next_kernel_id = (i + 1) % kernel_list.size();
+      std::vector<Tensor*> required_tensors;
+      for (auto t : kernel_list[next_kernel_id].inputs) {
+          movement_hints.emplace_back(TensorLocation::NOT_KNOWN, TensorLocation::IN_GPU, kernel_list[i].kernel_id, t);
+      }
+      for (auto t: kernel_list[next_kernel_id].outputs) {
+          movement_hints.emplace_back(TensorLocation::NOT_PRESENT, TensorLocation::IN_GPU, kernel_list[i].kernel_id, t);
+      }
+    }
+    long long mem = 0;
+    int quit = 0;
+    for (int i = 0; i < (int)kernel_list.size(); i++) {
+      std::vector<Tensor*> required_tensors;
+      for (auto t : kernel_list[i].inputs) {
+          mem += t->size_in_byte;
+          if (mem > 4 * BYTES_PER_GB) {
+            quit = 1;
+            break;
+          }
+          movement_hints.emplace_back(TensorLocation::NOT_KNOWN, TensorLocation::IN_GPU, 0, t);
+      }
+      if (quit == 1) break;
+      for (auto t: kernel_list[i].outputs) {
+          mem += t->size_in_byte;
+          if (mem > 4 * BYTES_PER_GB) {
+            quit = 1;
+            break;
+          }
+          movement_hints.emplace_back(TensorLocation::NOT_PRESENT, TensorLocation::IN_GPU, 0, t);
+      }
+      if (quit == 1) break;
+    }
+    compute_offloading_policy();
+  }
+  else {
   std::unordered_set<Tensor *> ssdItems;
   for (int i = 0; i < (int)kernel_list.size(); i++) {
       int next_kernel_id = (i + 1) % kernel_list.size();
@@ -333,7 +604,7 @@ void scheduling_movement_hints() {
           movement_hints.emplace_back(TensorLocation::NOT_PRESENT, TensorLocation::IN_GPU, kernel_list[i].kernel_id, t);
       }
 
-      int part_6 = 0;
+      
       if (part_6 != 0 && i > 0) {
         for (auto t : kernel_list[i-1].inputs) {
           int next = -1;
@@ -393,6 +664,7 @@ void scheduling_movement_hints() {
         }
 
       }
+    }
   }
 
   // make sure the movement hints are sorted, the simulator depends on this
