@@ -305,13 +305,37 @@ tuple<Addr, GPUPageTable::GPUPageTableEntry, TensorLocation, GPUPageTable::Evict
       EvictCandidate &ret_candidate = get<3>(evicted_entry);
       ret_candidate.vpn = *lru_it;
       ret_candidate.tensor = searchTensorForPage(ret_candidate.vpn);
+      int hot = 0;
+      if (ret_candidate.hotness == Dead) {
+        hot = -1;
+      } else if (ret_candidate.hotness == Eviction_P::Hot) {
+        hot = 1;
+      } else if (ret_candidate.hotness == Eviction_P::Medium) {
+        hot = 0;
+      } else if (ret_candidate.hotness == Eviction_P::Cold) {
+        hot = 0;
+      } else {
+        hot = 0;
+      }
+
       ret_candidate.hotness = Eviction_P::Invalid;
       ret_candidate.exact_hotness = Eviction_P::Invalid;
 
       get<0>(evicted_entry) = ret_candidate.vpn;
       get<1>(evicted_entry) = page_table.at(ret_candidate.vpn);
+      //Set eviction destination based on hotness
+      if (hot == -1) {
+        get<2>(evicted_entry) = NOT_PRESENT;
+      } else if (hot == 0) {
+        get<2>(evicted_entry) = IN_SSD;
+      } else if (hot ==1) {
+        get<2>(evicted_entry) = IN_CPU;
+      } else  {
+        get<2>(evicted_entry) = IN_CPU;
+      }
+
       // get<2>(evicted_entry) = (rand() & 1) ? IN_SSD : IN_CPU;
-      get<2>(evicted_entry) = IN_CPU;
+      //get<2>(evicted_entry) = IN_CPU;
       break;
     }
     case EvcPolicy::GUIDED: {

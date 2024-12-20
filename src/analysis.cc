@@ -322,6 +322,7 @@ void scheduling_movement_hints() {
     }
   } */
   movement_hints.clear();
+  std::unordered_set<Tensor *> ssdItems;
   for (int i = 0; i < (int)kernel_list.size(); i++) {
       int next_kernel_id = (i + 1) % kernel_list.size();
       std::vector<Tensor*> required_tensors;
@@ -330,6 +331,67 @@ void scheduling_movement_hints() {
       }
       for (auto t: kernel_list[next_kernel_id].outputs) {
           movement_hints.emplace_back(TensorLocation::NOT_PRESENT, TensorLocation::IN_GPU, kernel_list[i].kernel_id, t);
+      }
+
+      int part_6 = 0;
+      if (part_6 != 0 && i > 0) {
+        for (auto t : kernel_list[i-1].inputs) {
+          int next = -1;
+          for(int j = i; j < (int)kernel_list.size(); j++) {
+            for(auto s : kernel_list[j].inputs) {
+              if (s == t) {
+                next = j-i;
+                break;
+              }
+            }
+            if (next!=-1) { //break out of seeking loop if we have found a spot
+              break;
+            }
+          }
+
+          if (next > 20) {
+            ssdItems.insert(t);
+            movement_hints.emplace_back(TensorLocation::IN_GPU, TensorLocation::IN_SSD, kernel_list[i-1].kernel_id, t);
+          }  else if (next > 10) {
+            movement_hints.emplace_back(TensorLocation::IN_GPU, TensorLocation::IN_CPU, kernel_list[i-1].kernel_id, t);
+          }
+        }
+        for (auto t: kernel_list[i-1].outputs) {
+          int next = -1;
+          for(int j = i; j < (int)kernel_list.size(); j++) {
+            for(auto s : kernel_list[j].inputs) {
+              if (s == t) {
+                next = j-i;
+                break;
+              }
+            }
+            if (next!=-1) { //break out of seeking loop if we have found a spot
+              break;
+            }
+          }
+
+          if (next > 20) {
+            ssdItems.insert(t);
+            movement_hints.emplace_back(TensorLocation::IN_GPU, TensorLocation::IN_SSD, kernel_list[i-1].kernel_id, t);
+          }  else if (next > 10) {
+            movement_hints.emplace_back(TensorLocation::IN_GPU, TensorLocation::IN_CPU, kernel_list[i-1].kernel_id, t);
+          }
+        }
+
+        int future_kid = (i + 5) % kernel_list.size();
+        for (auto t : kernel_list[future_kid].inputs) {
+          if (ssdItems.find(t) != ssdItems.end()) {
+            ssdItems.erase(t);
+            movement_hints.emplace_back(TensorLocation::IN_SSD, TensorLocation::IN_CPU, kernel_list[i].kernel_id, t);
+          }
+        }
+        for (auto t: kernel_list[next_kernel_id].outputs) {
+          if (ssdItems.find(t) != ssdItems.end()) {
+            ssdItems.erase(t);
+            movement_hints.emplace_back(TensorLocation::IN_SSD, TensorLocation::IN_CPU, kernel_list[i].kernel_id, t);
+          }
+        }
+
       }
   }
 
