@@ -99,7 +99,7 @@ def gen_cost_configs():
                 )
 
                 # Define the output file path
-                filename = f"{model}-1024-hostdram{percent}.conf"  # Added .conf extension for clarity
+                filename = f"{model}-1024-hostdram{percent}p6.conf"  # Added .conf extension for clarity
                 file_path = Path(output_base_dir) / filename
 
                 # Create the directory if it doesn't exist
