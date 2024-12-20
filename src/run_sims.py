@@ -126,7 +126,6 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         '--experiments',
         nargs='+',
-        choices=['ideal', 'hostdram', 'ssd'],
         help="Specify which experiments to run. Choices: ideal, hostdram, ssd. If not specified, all experiments are run."
     )
     parser.add_argument(
